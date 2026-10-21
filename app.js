@@ -89,8 +89,6 @@ c.on("connect",()=>{
 document.querySelectorAll("[data-mode]").forEach(b=>b.onclick=()=>{
  if(!connected()||!currentStatus||Date.now()-lastStatus>=45000||currentStatus.switchPosition!==1)return;
  const mode=b.dataset.mode;
- if(mode==="0"&&!confirm("Turn monitoring OFF?"))return;
- if(mode==="2"&&!confirm("Arm the system?"))return;
  client.publish(commandTopic,mode,{qos:0,retain:false},err=>{if(err)alert("Command could not be sent.");});
 });
 $("silence").onclick=()=>{
