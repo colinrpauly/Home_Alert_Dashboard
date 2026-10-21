@@ -3,6 +3,25 @@ const $ = id => document.getElementById(id);
 const statusTopic="home/security/status", commandTopic="home/security/command";
 let client=null, lastStatus=0, currentStatus=null;
 const modeNames=["Off","Monitor","Armed"];
+const savedLoginKey = "homeAlertSavedLogin";
+
+function getSavedLogin() {
+ try {
+  return JSON.parse(localStorage.getItem(savedLoginKey) || "null");
+ } catch {
+  return null;
+ }
+}
+
+function saveLogin(host, username, password) {
+ localStorage.setItem(savedLoginKey, JSON.stringify({
+  host, username, password
+ }));
+}
+
+function forgetLogin() {
+ localStorage.removeItem(savedLoginKey);
+}
 function connected(){return !!client?.connected}
 function refresh(){
  const fresh=connected() && currentStatus && Date.now()-lastStatus<45000;
@@ -48,8 +67,18 @@ $("login").onsubmit=e=>{
   username,password,clientId:"home-alert-phone-"+Math.random().toString(16).slice(2),
   clean:true,reconnectPeriod:5000,connectTimeout:12000,protocolVersion:4
  });
- client=c;$("password").value=""; // do not persist credentials to browser storage
- c.on("connect",()=>{c.subscribe(statusTopic,{qos:0},err=>{if(err)$("loginError").textContent="Could not subscribe to status."});closeLogin();$("settings").textContent="Disconnect";$("connect").disabled=false;refresh()});
+client=c;
+$("password").value="";
+c.on("connect",()=>{
+  saveLogin(host, username, password);
+  c.subscribe(statusTopic,{qos:0},err=>{
+    if(err)$("loginError").textContent="Could not subscribe to status.";
+  });
+  closeLogin();
+  $("settings").textContent="Disconnect";
+  $("connect").disabled=false;
+  refresh();
+});
  c.on("message",(topic,payload)=>{
   if(topic!==statusTopic)return;
   try{const s=JSON.parse(payload.toString());if(![0,1,2].includes(s.mode)||![0,1,2].includes(s.switchPosition)||typeof s.sensorOnline!=="boolean"||typeof s.alarmActive!=="boolean")return;currentStatus=s;lastStatus=Date.now();refresh()}catch{}
@@ -68,4 +97,26 @@ $("silence").onclick=()=>{
  if(!connected()||!currentStatus||Date.now()-lastStatus>=45000||currentStatus.switchPosition!==1||!currentStatus.alarmActive)return;
  client.publish(commandTopic,"S",{qos:0,retain:false},err=>{if(err)alert("Silence command could not be sent.");});
 };
-setInterval(refresh,3000);refresh();
+// Automatically reconnect using saved credentials
+function autoLogin() {
+ const saved = getSavedLogin();
+
+ if (!saved || !saved.host || !saved.username || !saved.password) {
+  return;
+ }
+
+ if (typeof mqtt === "undefined") {
+  console.log("MQTT library unavailable for automatic login");
+  return;
+ }
+
+ $("host").value = saved.host;
+ $("user").value = saved.username;
+ $("password").value = saved.password;
+
+ $("login").requestSubmit();
+}
+
+setInterval(refresh,3000);
+refresh();
+autoLogin();
