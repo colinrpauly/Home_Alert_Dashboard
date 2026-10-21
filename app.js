@@ -57,6 +57,31 @@ function showLogin(){ $("dialog").classList.remove("hidden");$("loginError").tex
 function closeLogin(){ $("dialog").classList.add("hidden") }
 $("settings").onclick=()=>{if(client){client.end(true);client=null;currentStatus=null;lastStatus=0;$("settings").textContent="Connect";refresh()}else showLogin()};
 $("cancel").onclick=closeLogin;
+$("forget").onclick = () => {
+ // Delete saved login credentials
+ forgetLogin();
+
+ // Disconnect from MQTT
+ if (client) {
+  client.end(true);
+  client = null;
+ }
+
+ // Clear login fields
+ $("host").value = "";
+ $("user").value = "";
+ $("password").value = "";
+
+ // Reset connection status
+ currentStatus = null;
+ lastStatus = 0;
+ $("settings").textContent = "Connect";
+ $("connect").disabled = false;
+
+ // Close login window and update dashboard
+ closeLogin();
+ refresh();
+};
 $("login").onsubmit=e=>{
  e.preventDefault();
  if(typeof mqtt==="undefined"){$("loginError").textContent="MQTT library could not load. Check your connection.";return}
