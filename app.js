@@ -5,157 +5,134 @@ const $ = id => document.getElementById(id);
 
 const statusTopic = "home/security/status";
 const commandTopic = "home/security/command";
-const savedLoginKey = "homeAlertSavedLogin";
-
-const modeNames = ["Off", "Monitor", "Armed"];
 
 let client = null;
-let currentStatus = null;
 let lastStatus = 0;
+let currentStatus = null;
 
-function connected() {
-  return client !== null && client.connected === true;
-}
+const modeNames = ["Off", "Monitor", "Armed"];
+const savedLoginKey = "homeAlertSavedLogin";
 
 function getSavedLogin() {
   try {
-    const saved = localStorage.getItem(savedLoginKey);
-    return saved ? JSON.parse(saved) : null;
-  } catch (error) {
+    return JSON.parse(localStorage.getItem(savedLoginKey) || "null");
+  } catch {
     return null;
   }
 }
 
-function saveLogin(details) {
-  localStorage.setItem(savedLoginKey, JSON.stringify(details));
+function saveLogin(host, username, password) {
+  localStorage.setItem(savedLoginKey, JSON.stringify({
+    host, username, password
+  }));
 }
 
 function forgetLogin() {
   localStorage.removeItem(savedLoginKey);
 }
 
-function showDialog() {
-  const saved = getSavedLogin();
-
-  if (saved) {
-    $("host").value = saved.host || "";
-    $("user").value = saved.username || "";
-    $("password").value = saved.password || "";
-  }
-
-  $("loginError").textContent = "";
-  $("dialog").classList.remove("hidden");
-}
-
-function hideDialog() {
-  $("dialog").classList.add("hidden");
-}
-
-function sendCommand(command) {
-  if (!connected()) return;
-
-  client.publish(commandTopic, command, {
-    qos: 1,
-    retain: false
-  });
+function connected() {
+  return !!client?.connected;
 }
 
 function refresh() {
-  const fresh = Boolean(
+
+  const fresh =
     connected() &&
     currentStatus &&
-    Date.now() - lastStatus < 45000
-  );
+    Date.now() - lastStatus < 45000;
+
+  $("connection").textContent = connected()
+    ? (fresh ? "● Connected" : "● Waiting for fresh status")
+    : "● Disconnected";
+
+  $("updated").textContent = lastStatus
+    ? `Last update: ${new Date(lastStatus).toLocaleTimeString()}`
+    : "Waiting for status";
 
   const s = fresh ? currentStatus : null;
-
-  $("connection").textContent =
-    !connected() ? "Disconnected" :
-    fresh ? "Connected" : "Waiting for status";
-
-  $("settings").textContent = connected() ? "Settings" : "Connect";
+  const mode = s?.mode;
 
   // System mode
-  const mode = fresh && Number.isInteger(s.mode)
-    ? s.mode
-    : -1;
-
-  const modeValid = mode >= 0 && mode <= 2;
-
-  $("mode").textContent = modeValid
-    ? modeNames[mode]
-    : "Not connected";
-
-  $("hero").classList.toggle("armed", modeValid && mode === 2);
-
-  $("heroicon").textContent =
-    !modeValid ? "◇" :
-    mode === 2 ? "◆" :
-    mode === 1 ? "◈" : "◇";
+  $("mode").textContent =
+    Number.isInteger(mode) && mode >= 0 && mode <= 2
+      ? modeNames[mode]
+      : "Status unavailable";
 
   $("modeDetail").textContent =
-    !fresh ? "Connect to view your home system." :
-    mode === 2 ? "Motion detection is armed." :
-    mode === 1 ? "Motion monitoring is active." :
-    "Motion alerts are off.";
+    mode === 0 ? "Local motion alarm is off." :
+    mode === 1 ? "Motion monitoring with a brief chirp." :
+    mode === 2 ? "Alarm sounds when motion is detected." :
+    "Waiting for a recent status message.";
 
-  // Physical switch controls whether remote commands are allowed
-  const remoteAllowed = fresh && s.switchPosition === 1;
+  $("hero").classList.toggle("armed", mode === 2);
 
-  document.querySelectorAll("[data-mode]").forEach(button => {
-    const buttonMode = Number(button.dataset.mode);
+  $("heroicon").textContent =
+    mode === 2 ? "⬡" :
+    mode === 1 ? "◎" : "◇";
 
-    button.classList.toggle(
-      "selected",
-      modeValid && buttonMode === mode
-    );
+  // Physical switch and remote controls
+  document.querySelectorAll("[data-mode]").forEach(b => {
+    const n = Number(b.dataset.mode);
 
-    button.disabled = !remoteAllowed;
+    b.disabled = !fresh || s.switchPosition !== 1;
+    b.classList.toggle("selected", mode === n);
   });
 
   $("override").textContent =
-    !fresh ? "Remote commands are disabled until connected." :
-    !remoteAllowed ? "Physical switch controls the system. Remote commands are disabled." :
-    "Remote control is enabled.";
+    !fresh
+      ? "Controls locked until a fresh status is received."
+      : s.switchPosition === 1
+        ? "Physical selector: REMOTE · App controls enabled"
+        : s.switchPosition === 0
+          ? "Physical selector: OFF · App controls locked"
+          : "Physical selector: ARMED · App controls locked";
 
   // Downstairs sensor
-  const sensorOnline = fresh && s.sensorOnline === true;
-
   $("sensor").textContent =
     !fresh ? "Unknown" :
-    sensorOnline ? "Online" : "Offline";
+    s.sensorOnline ? "Online" : "Offline";
 
   $("sensor").className =
-    "pill " + (!fresh ? "" : sensorOnline ? "good" : "bad");
+    "pill " +
+    (!fresh ? "" : s.sensorOnline ? "good" : "bad");
 
   $("heartbeat").textContent =
     !fresh ? "Unknown" :
-    sensorOnline ? "Receiving heartbeats" : "No recent heartbeat";
+    s.sensorOnline ? "Receiving" : "Not receiving";
 
-  $("lastMotion").textContent =
-    fresh && s.lastMotion
-      ? String(s.lastMotion)
-      : "Unavailable";
-
-  // Alarm status
-  const alarmActive = fresh && s.alarmActive === true;
-
+  // Alarm
   $("alarm").textContent =
     !fresh ? "Unknown" :
-    alarmActive ? "Active" : "Silent";
+    s.alarmActive ? "ACTIVE" : "Inactive";
 
   $("alarm").className =
-    "pill " + (!fresh ? "" : alarmActive ? "bad" : "good");
+    "pill " +
+    (!fresh ? "" : s.alarmActive ? "bad" : "good");
 
-  $("silence").disabled = !alarmActive;
+  $("silence").disabled =
+    !fresh ||
+    s.switchPosition !== 1 ||
+    !s.alarmActive;
 
-  // Master power source
+  $("lastMotion").textContent =
+    !fresh
+      ? "Unavailable"
+      : (typeof s.lastMotion === "string"
+          ? s.lastMotion
+          : "Unavailable");
+
+  // MASTER BATTERY MONITORING
+
   const power = $("powerSource");
 
   power.textContent =
     !fresh ? "Unknown" :
-    typeof s.wallPowerPresent !== "boolean" ? "Unavailable" :
-    s.wallPowerPresent ? "Wall power" : "Battery backup";
+    typeof s.wallPowerPresent !== "boolean"
+      ? "Unavailable"
+      : s.wallPowerPresent
+        ? "Wall power"
+        : "Battery backup";
 
   power.className =
     "pill " +
@@ -163,7 +140,6 @@ function refresh() {
       ? ""
       : s.wallPowerPresent ? "good" : "warn");
 
-  // Master battery
   const valid =
     fresh &&
     s.batteryValid === true &&
@@ -194,7 +170,8 @@ function refresh() {
     valid ? String(Math.round(pct)) : "0"
   );
 
-  // Downstairs PIR battery monitoring
+  // DOWNSTAIRS PIR BATTERY MONITORING
+
   const downstairsPower = $("downstairsPowerSource");
 
   const downstairsValid =
@@ -212,6 +189,7 @@ function refresh() {
     ? s.downstairsBatteryPercent
     : 0;
 
+  // Downstairs power source
   downstairsPower.textContent =
     !downstairsValid ? "Unknown" :
     s.downstairsWallPower === true ? "Wall power" :
@@ -224,16 +202,19 @@ function refresh() {
       s.downstairsWallPower === true ? "good" :
       s.downstairsWallPower === false ? "warn" : "");
 
+  // Downstairs battery percentage
   $("downstairsBatteryPercent").textContent =
     downstairsValid
       ? `${downstairsPct.toFixed(1)}%`
       : "Unavailable";
 
+  // Downstairs battery voltage
   $("downstairsBatteryVoltage").textContent =
     downstairsValid
       ? `${s.downstairsBatteryVoltage.toFixed(2)} V`
       : "Unavailable";
 
+  // Downstairs battery bar
   $("downstairsBatteryFill").style.width =
     downstairsValid ? `${downstairsPct}%` : "0%";
 
@@ -244,73 +225,134 @@ function refresh() {
 
   $("downstairsBatteryTrack").setAttribute(
     "aria-valuenow",
-    downstairsValid ? String(Math.round(downstairsPct)) : "0"
+    downstairsValid
+      ? String(Math.round(downstairsPct))
+      : "0"
   );
-
-  // Last status update
-  $("updated").textContent =
-    !lastStatus ? "Waiting for status" :
-    fresh ? "Updated " + new Date(lastStatus).toLocaleTimeString() :
-    "Status unavailable";
 }
 
-function connectMQTT(host, username, password) {
+// LOGIN AND MQTT CONNECTION
+
+function showLogin() {
+  $("dialog").classList.remove("hidden");
+  $("loginError").textContent = "";
+}
+
+function closeLogin() {
+  $("dialog").classList.add("hidden");
+}
+
+$("settings").onclick = () => {
   if (client) {
-    client.removeAllListeners();
+    client.end(true);
+    client = null;
+    currentStatus = null;
+    lastStatus = 0;
+    $("settings").textContent = "Connect";
+    refresh();
+  } else {
+    showLogin();
+  }
+};
+
+$("cancel").onclick = closeLogin;
+
+$("forget").onclick = () => {
+
+  // Delete saved login credentials
+  forgetLogin();
+
+  // Disconnect from MQTT
+  if (client) {
     client.end(true);
     client = null;
   }
 
+  // Clear login fields
+  $("host").value = "";
+  $("user").value = "";
+  $("password").value = "";
+
+  // Reset connection status
   currentStatus = null;
   lastStatus = 0;
 
-  let address = host.trim();
+  $("settings").textContent = "Connect";
+  $("connect").disabled = false;
 
-  if (!address.startsWith("wss://")) {
-    address = "wss://" + address;
-  }
+  // Close login window and update dashboard
+  closeLogin();
+  refresh();
+};
 
-  if (!address.includes("/", 6)) {
-    address += ":8084/mqtt";
-  }
+$("login").onsubmit = e => {
 
-  try {
-    client = mqtt.connect(address, {
-      username: username,
-      password: password,
-      clientId: "home-alert-" + Math.random().toString(16).slice(2),
-      clean: true,
-      reconnectPeriod: 3000,
-      connectTimeout: 10000
-    });
-  } catch (error) {
-    $("loginError").textContent = "Unable to start MQTT connection.";
-    showDialog();
+  e.preventDefault();
+
+  if (typeof mqtt === "undefined") {
+    $("loginError").textContent =
+      "MQTT library could not load. Check your connection.";
     return;
   }
 
-  const c = client;
+  const host = $("host").value.trim();
+  const username = $("user").value.trim();
+  const password = $("password").value;
+
+  if (!/^[a-z0-9.-]+$/i.test(host)) {
+    $("loginError").textContent = "Invalid hostname";
+    return;
+  }
+
+  $("connect").disabled = true;
+  $("loginError").textContent = "Connecting…";
+
+  const c = mqtt.connect(`wss://${host}:8084/mqtt`, {
+    username,
+    password,
+    clientId:
+      "home-alert-phone-" +
+      Math.random().toString(16).slice(2),
+    clean: true,
+    reconnectPeriod: 5000,
+    connectTimeout: 12000,
+    protocolVersion: 4
+  });
+
+  client = c;
+
+  $("password").value = "";
 
   c.on("connect", () => {
-    c.subscribe(statusTopic, { qos: 1 }, error => {
-      if (error) {
-        console.error("MQTT subscription failed:", error);
+
+    saveLogin(host, username, password);
+
+    c.subscribe(statusTopic, { qos: 0 }, err => {
+      if (err) {
+        $("loginError").textContent =
+          "Could not subscribe to status.";
       }
     });
 
-    hideDialog();
+    closeLogin();
+
+    $("settings").textContent = "Disconnect";
+    $("connect").disabled = false;
+
     refresh();
   });
 
   c.on("message", (topic, payload) => {
+
     if (topic !== statusTopic) return;
 
     try {
+
       const s = JSON.parse(payload.toString());
 
       if (
-        typeof s.mode !== "number" ||
-        typeof s.switchPosition !== "number" ||
+        ![0, 1, 2].includes(s.mode) ||
+        ![0, 1, 2].includes(s.switchPosition) ||
         typeof s.sensorOnline !== "boolean" ||
         typeof s.alarmActive !== "boolean"
       ) {
@@ -319,28 +361,29 @@ function connectMQTT(host, username, password) {
 
       currentStatus = s;
       lastStatus = Date.now();
+
       refresh();
 
-    } catch (error) {
-      console.error("Invalid status message:", error);
-    }
+    } catch {}
   });
 
-  c.on("reconnect", refresh);
-  c.on("offline", refresh);
-  c.on("close", refresh);
+  c.on("error", () => {
+    $("loginError").textContent =
+      "Connection failed. Check credentials, ACL, and WSS endpoint.";
 
-  c.on("error", error => {
-    console.error("MQTT connection error:", error);
+    $("connect").disabled = false;
     refresh();
   });
 
-  refresh();
-}
+  c.on("close", refresh);
+};
 
-// Mode buttons
-document.querySelectorAll("[data-mode]").forEach(button => {
-  button.addEventListener("click", () => {
+// MODE BUTTONS
+
+document.querySelectorAll("[data-mode]").forEach(b => {
+
+  b.onclick = () => {
+
     if (
       !connected() ||
       !currentStatus ||
@@ -350,82 +393,73 @@ document.querySelectorAll("[data-mode]").forEach(button => {
       return;
     }
 
-    sendCommand(button.dataset.mode);
-  });
+    const mode = b.dataset.mode;
+
+    client.publish(
+      commandTopic,
+      mode,
+      { qos: 0, retain: false },
+      err => {
+        if (err) alert("Command could not be sent.");
+      }
+    );
+  };
 });
 
-// Silence alarm
-$("silence").addEventListener("click", () => {
+// SILENCE ALARM
+
+$("silence").onclick = () => {
+
   if (
-    connected() &&
-    currentStatus &&
-    Date.now() - lastStatus < 45000 &&
-    currentStatus.alarmActive === true
+    !connected() ||
+    !currentStatus ||
+    Date.now() - lastStatus >= 45000 ||
+    currentStatus.switchPosition !== 1 ||
+    !currentStatus.alarmActive
   ) {
-    sendCommand("silence");
-  }
-});
-
-// Open connection settings
-$("settings").addEventListener("click", showDialog);
-
-// Cancel connection dialog
-$("cancel").addEventListener("click", hideDialog);
-
-// Forget saved credentials
-$("forget").addEventListener("click", () => {
-  forgetLogin();
-
-  if (client) {
-    client.removeAllListeners();
-    client.end(true);
-    client = null;
-  }
-
-  currentStatus = null;
-  lastStatus = 0;
-
-  $("host").value = "";
-  $("user").value = "";
-  $("password").value = "";
-  $("loginError").textContent = "";
-
-  refresh();
-});
-
-// Login form
-$("login").addEventListener("submit", event => {
-  event.preventDefault();
-
-  const host = $("host").value.trim();
-  const username = $("user").value.trim();
-  const password = $("password").value;
-
-  if (!host || !username || !password) {
-    $("loginError").textContent = "Please complete all fields.";
     return;
   }
 
-  saveLogin({ host, username, password });
-  connectMQTT(host, username, password);
-});
+  client.publish(
+    commandTopic,
+    "S",
+    { qos: 0, retain: false },
+    err => {
+      if (err) alert("Silence command could not be sent.");
+    }
+  );
+};
 
-// Reconnect using saved login
+// AUTOMATIC LOGIN
+
 function autoLogin() {
+
   const saved = getSavedLogin();
 
   if (
-    saved &&
-    saved.host &&
-    saved.username &&
-    saved.password
+    !saved ||
+    !saved.host ||
+    !saved.username ||
+    !saved.password
   ) {
-    connectMQTT(saved.host, saved.username, saved.password);
-  } else {
-    showDialog();
+    return;
   }
+
+  if (typeof mqtt === "undefined") {
+    console.log(
+      "MQTT library unavailable for automatic login"
+    );
+    return;
+  }
+
+  $("host").value = saved.host;
+  $("user").value = saved.username;
+  $("password").value = saved.password;
+
+  $("login").requestSubmit();
 }
 
 setInterval(refresh, 3000);
+
 refresh();
 autoLogin();
